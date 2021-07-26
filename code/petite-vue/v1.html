@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8">
+        <title>v1</title>
+    </head>
+    <body>
+        <div v-scope>this is content: {{msg}}, and a + b = {{ a + b }}, is't over</div>
+        <script>
+            function createFunc(exp) {
+                return new Function(`scope`, `with(scope) { return (${exp}) }`);
+            }
+            const RE = /{{([^]+?)}}/g;
+            function walk(node, context) {
+                const { nodeType } = node;
+                if (nodeType === 1) { // Element
+                    return walkChildren(node, context);
+                }
+                if (nodeType === 3) { // Text
+                    const text = node.textContent;
+                    let i = 0;
+                    if (text.includes('{{')) {
+                        let match = null;
+                        const segments = []; // 保存所有截断的文本
+                        while ((match = RE.exec(text))) {
+                            segments.push(text.slice(i, match.index));
+                            i = match.index + match[0].length;
+                            const exp = match[1].trim(); // 删除表达式前后的空白字符
+                            segments.push(createFunc(exp)(context.scope));
+                        }
+                        segments.push(text.slice(i));
+                        node.textContent = segments.join('');
+                    }
+                }
+            }
+            function walkChildren(node, context) {
+                let child = node.firstChild;
+                while(child) {
+                    walk(child, context);
+                    child = child.nextSibling;
+                }
+            }
+            const PetiteVue = {
+                createApp(scope) {
+                    const appContent = {
+                        scope: scope,
+                    };
+                    const app = {
+                        context: appContent,
+                        mount() {
+                            const root = document.querySelector('[v-scope]');
+                            if (!root) {
+                                console.warn('请提供有v-scope属性的html标签');
+                                return;
+                            }
+                            walk(root, appContent);
+                            root.removeAttribute('v-scope');
+                        }
+                    };
+                    return app;
+                }
+            };
+        </script>
+        <script>
+            PetiteVue.createApp({ msg: 'hello world!', a: 1, b: 2 }).mount();
+        </script>
+    </body>
+</html>
