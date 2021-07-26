@@ -1,4 +1,4 @@
-petite-vue还算是比较新的一个框架，尤雨溪2021年6月30号才初始化项目，经过几天密集的代码提交后，有二十多天已经没有更新了，看得出已经比较稳定了，本文不打算详细介绍petite-vue是干嘛的，有啥优势，关于这些可以查看github官方介绍(https://github.com/vuejs/petite-vue)，首先来看看怎么跑一个hello world吧。
+petite-vue还算是比较新的一个框架，尤雨溪2021年6月30号才初始化项目，经过几天密集的代码提交后，有二十多天已经没有更新了，看得出已经比较稳定了，本文不打算详细介绍petite-vue是干嘛的，有啥优势，关于这些可以查看[官方介绍](https://github.com/vuejs/petite-vue)，首先来看看怎么跑一个hello world吧。
 ```
 <div v-scope>{{msg}}</div>
 <script src="https://unpkg.com/petite-vue"></script>
