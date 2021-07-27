@@ -3,6 +3,7 @@
 # petite-vue
 petite-vue相比vue3，实现更加简单，代码量也少了很多，学习成本也较低，因此熟悉了petite-vue框架再学习vue3会事半功倍，我就先从它开始，去窥探其中的奥秘吧；
 
-## 1.<a href="/articles/petite-vue/认识petite-vue.md">认识petite-vue</a>
-
-# vue3 
+## 1.<a href="/articles/petite-vue/跑起来.md">跑起来</a>
+## 2.<a href="/articles/petite-vue/事件.md">事件</a>
+# vue3
+...待续...

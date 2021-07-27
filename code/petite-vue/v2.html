@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8">
+        <title>事件</title>
+    </head>
+    <body>
+        <div v-scope>
+            <p>{{ count }}</p>
+            <button @click="increment">increment</button>
+            <button v-on:click="count--">decrement</button>
+        </div>
+        <script>
+            function createFunc(exp) {
+                return new Function(`scope`, `with(scope) { return (${exp}) }`);
+            }
+            const RE = /{{([^]+?)}}/g;
+            function walk(node, context) {
+                const { nodeType } = node;
+                if (nodeType === 1) { // Element
+                    walkChildren(node, context);
+                }
+                if (nodeType === 3) { // Text
+                    const text = node.textContent;
+                    let i = 0;
+                    if (text.includes('{{')) {
+                        let match = null;
+                        const segments = []; // 保存所有截断的文本
+                        while ((match = RE.exec(text))) {
+                            segments.push(text.slice(i, match.index));
+                            i = match.index + match[0].length;
+                            const exp = match[1].trim(); // 删除表达式前后的空白字符
+                            segments.push(exp);
+                        }
+                       
+                        segments.push(text.slice(i));
+                        node.textContent = '';
+                        context.effect(() => {
+                            node.textContent = createFunc(segments.filter(Boolean).join('+'))(context.scope);
+                        });
+                    }
+                    return;
+                }
+                // 解析node自己的属性
+                for (const { name, value } of [...node.attributes]) {
+                    if (name.startsWith('@') || name.startsWith('v-on:')) { // 事件指令
+                        const match = name.match(onRE);
+                        const eventName = match[2];
+                        const eventCallBack = value;
+                        // 需要判断回调是行内还是调用方法
+                        const isInlineCallBack = !cbRE.test(eventCallBack);
+                        let callBack;
+                        if (isInlineCallBack) {
+                            callBack = new Function(`$event`, `scope`, `with(scope) { return (${eventCallBack}) }`);
+                        } else {
+                            window.s = context.scope;
+                            callBack = context.scope[eventCallBack].bind(context.scope);
+                        }
+                        node.addEventListener(eventName, (e) => {
+                            callBack(e, context.scope);
+                        }, false);
+                    }
+                }
+            }
+            const onRE = /^(@|v-on:)(\w+)/;
+            const cbRE = /^\s*(\[a-zA-Z_]+\[[a-zA-Z_]+\]|[a-zA-Z_]+\.[a-zA-Z_]+|[a-zA-Z_]+)\s*$/;
+            function walkChildren(node, context) {
+                let child = node.firstChild;
+                while(child) {
+                    walk(child, context);
+                    child = child.nextSibling;
+                }
+            }
+            let activeEffect = null;
+            const effectStack = [];
+            function createReactiveEffect(fn) {
+                function reactiveEffect() {
+                    activeEffect = fn;
+                    effectStack.push(fn);
+                    return fn();
+                    effectStack.pop();
+                    activeEffect = effectStack[effectStack.length - 1];
+                }
+                reactiveEffect.lazy = false;
+                return reactiveEffect;
+            }
+            const targetMap = new WeakMap();
+            function trigger(target, key) {
+                const m = targetMap.get(target);
+                const effects = m.get(key);
+                effects.forEach((effect) => {
+                    effect && effect();
+                });
+            }
+            function reactive(target) {
+                const proxy = new Proxy(target, {
+                    get(target, key) {
+                        const m = targetMap.get(target);
+                        if (!m.has(key)) {
+                            m.set(key, new Set());
+                        }
+                        const depMap = m.get(key);
+                        depMap.add(activeEffect);
+                        const result = Reflect.get(...arguments);
+                        return result;
+                    },
+                    set(target, key, value) {
+                        const result = Reflect.set(...arguments);
+                        trigger(...arguments);
+                        return result;
+                    },
+                });
+                targetMap.set(target, new Map());
+                return proxy;
+            }
+            function createContext(scope) {
+                return {
+                    scope: reactive(scope),
+                    effects: [],
+                    effect(fn, options) {
+                        const reactiveEffect = createReactiveEffect(fn);
+                        if (!reactiveEffect.lazy) {
+                            reactiveEffect();
+                        }
+                        this.effects.push(reactiveEffect);
+                    }
+                }
+            }
+            const PetiteVue = {
+                createApp(scope = {}) {
+                    const appContent = createContext(scope);
+                    const app = {
+                        context: appContent,
+                        mount() {
+                            const root = document.querySelector('[v-scope]');
+                            if (!root) {
+                                console.warn('请提供有v-scope属性的html标签');
+                                return;
+                            }
+                            walk(root, appContent);
+                            root.removeAttribute('v-scope');
+                        }
+                    };
+                    return app;
+                }
+            };
+        </script>
+        <script>
+            PetiteVue.createApp({
+                count: 0,
+                increment(e) {
+                    this.count++;
+                },
+            }).mount();
+        </script>
+    </body>
+</html>
