@@ -41,29 +41,88 @@
                     }
                     return;
                 }
-                // 解析node自己的属性
+                const dirRE = /^(@|:|v-)/;
+                // 先递归解析子节点，然后解析node自己的属性
                 for (const { name, value } of [...node.attributes]) {
-                    if (name.startsWith('@') || name.startsWith('v-on:')) { // 事件指令
-                        const match = name.match(onRE);
-                        const eventName = match[2];
-                        const eventCallBack = value;
-                        // 需要判断回调是行内还是调用方法
-                        const isInlineCallBack = !cbRE.test(eventCallBack);
-                        let callBack;
-                        if (isInlineCallBack) {
-                            callBack = new Function(`$event`, `scope`, `with(scope) { return (${eventCallBack}) }`);
-                        } else {
-                            window.s = context.scope;
-                            callBack = context.scope[eventCallBack].bind(context.scope);
-                        }
-                        node.addEventListener(eventName, (e) => {
-                            callBack(e, context.scope);
-                        }, false);
+                    if (dirRE.test(name)) { // 以@/:/v-开头
+                        processDirective(node, name, value, context);
                     }
                 }
             }
-            const onRE = /^(@|v-on:)(\w+)/;
-            const cbRE = /^\s*(\[a-zA-Z_]+\[[a-zA-Z_]+\]|[a-zA-Z_]+\.[a-zA-Z_]+|[a-zA-Z_]+)\s*$/;
+            // [A-Za-z_$]：字母(大小写)下划线或者$开头，也就是js变量名开头的规则
+            // [\w$]*：变量名开头之后，后面可以跟字母、数字、下划线、$，重复0次或者多次
+            // \.[A-Za-z_$][\w$]*|\['[^']*?']|\["[^"]*?"]|\[\d+]|\[[A-Za-z_$][\w$]*]：一个分组，里面又分为下面5种情况
+            // \.[A-Za-z_$][\w$]*：【.】开头，后面是合法的js标识符
+            // \['[^']*?']：匹配['xxxx']，[^']匹配除了单引号的所有字符
+            // \["[^"]*?"]：匹配["xxxx"]
+            // \[\d+]：匹配[123]
+            // \[[A-Za-z_$][\w$]*]：匹配合法的js标识符
+            // 综上所述，simplePathRE也就是匹配调用scope中存在的方法，例如:foo、scope.foo、scope['foo']
+            const simplePathRE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\['[^']*?']|\["[^"]*?"]|\[\d+]|\[[A-Za-z_$][\w$]*])*$/;
+            function on({ el, get, exp, arg, modifiers }) {
+                if (!arg) { // 对于事件指令来说，必须要有指令参数，即事件名称才是合法的
+                    console.error(`v-on="obj" syntax is not supported in petite-vue.`);
+                    return;
+                }
+                let handler = simplePathRE.test(exp)
+                    ? get(`(e => ${exp}(e))`) /*直接调用的是scope中的方法*/
+                    : get(`($event => { ${exp} })`) /*行内js语句，需要被包裹在函数中再执行*/;
+                if (modifiers) {
+                   // 暂时省略对修饰符的处理
+                }
+                el.addEventListener(arg, handler, false);
+            }
+            // 所有内置指令集合，目前就只有on
+            const builtInDirectives = {
+                on,
+            };
+            const modifierRE = /\.([\w-]+)/g;
+            function processDirective(el, raw, exp, ctx) {
+                let dir = null; // 指令名
+                let arg = null; // 指令参数
+                let modifiers = null; // 指令所有的修饰符
+                let modMatch = null;
+                while((modMatch = modifierRE.exec(raw))) { // 提取出事件修饰符，@click.a.b => { a: true, b: true }
+                    // (modifiers || (modifiers = {}))[modMatch[1]] = true; petite-vue源码
+                    // raw = raw.slice(0, modMatch.index); petite-vue源码
+                    if (!modifiers) {
+                        modifiers = {};
+                    }
+                    modifiers[modMatch[1]] = true;
+                }
+                raw = raw.slice(0, raw.indexOf('.'));
+                if(raw[0] === ':') {
+                    // bind指令，暂时未实现
+                }
+                if (raw[0] === '@') {
+                    dir = on;
+                    arg = raw.slice(1);
+                } else { // v-xx形式的指令
+                    const argIndex = raw.indexOf(':');
+                    const dirName = argIndex > 0 ? raw.slice(2, argIndex) : raw.slice(2);
+                    dir = builtInDirectives[dirName] || ctx.dirs[dirName] /*自定义指令*/;
+                    arg = argIndex > 0 ? raw.slice(argIndex + 1) : undefined;
+                }
+                if (dir) {
+                    applyDirective(el, dir, exp, ctx, arg, modifiers);
+                    el.removeAttribute(raw);
+                } else {
+                    console.error(`unknown custom directive ${raw}.`);
+                }
+            }
+
+            function applyDirective(el, dir, exp, ctx, arg, modifiers) {
+                const get = (e = exp) => createFunc(e)(ctx.scope);
+                dir({
+                    el,
+                    get,
+                    effect: ctx.effect,
+                    ctx,
+                    exp,
+                    arg,
+                    modifiers,
+                });
+            }
             function walkChildren(node, context) {
                 let child = node.firstChild;
                 while(child) {
@@ -77,7 +136,7 @@
                 function reactiveEffect() {
                     activeEffect = fn;
                     effectStack.push(fn);
-                    return fn();
+                    fn();
                     effectStack.pop();
                     activeEffect = effectStack[effectStack.length - 1];
                 }
@@ -117,6 +176,7 @@
                 return {
                     scope: reactive(scope),
                     effects: [],
+                    dirs: {},
                     effect(fn, options) {
                         const reactiveEffect = createReactiveEffect(fn);
                         if (!reactiveEffect.lazy) {
@@ -137,8 +197,9 @@
                                 console.warn('请提供有v-scope属性的html标签');
                                 return;
                             }
-                            walk(root, appContent);
                             root.removeAttribute('v-scope');
+                            walk(root, appContent);
+                            
                         }
                     };
                     return app;
