@@ -90,7 +90,7 @@
                     }
                     modifiers[modMatch[1]] = true;
                 }
-                raw = raw.slice(0, raw.indexOf('.'));
+                raw = raw.includes('.') ? raw.slice(0, raw.indexOf('.')) : raw;
                 if(raw[0] === ':') {
                     // bind指令，暂时未实现
                 }
