@@ -6,5 +6,7 @@ petite-vue相比vue3，实现更加简单，代码量也少了很多，学习成
 ## 1.<a href="/articles/petite-vue/跑起来.md">跑起来</a>
 ## 2.<a href="/articles/petite-vue/事件.md">事件</a>
 ## 3.<a href="/articles/petite-vue/if.md">if</a>
+## 4.<a href="/articles/petite-vue/for.md">for</a>
+
 # vue3
 ...待续...

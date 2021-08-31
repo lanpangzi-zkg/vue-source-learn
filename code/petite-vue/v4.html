@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8">
+        <title>循环</title>
+    </head>
+    <body>
+        <div v-scope>
+            <ul>
+                <li v-for="({ id, text }, index) in list" :key="id">
+                  <div>{{ index }} {{ { id, text } }}</div>
+                </li>
+              </ul>
+
+              <ul>
+                <li v-for="item of list" :key="item.id">
+                  <div>{{item.text}}</div>
+                </li>
+              </ul>
+        </div>
+        <script>
+            function isObject(value) {
+                return Object.prototype.toString.call(value) === '[object Object]';
+            }
+            function checkAttr(el, name) {
+                const val = el.getAttribute(name);
+                if (val != null) {
+                    el.removeAttribute(name);
+                }
+                return val;
+            }
+            function createFunc(exp) {
+                return new Function(`scope`, `with(scope) { return (${exp}); }`);
+            }
+            function toDisplayString(value) {
+             return value == null
+                ? ''
+                : isObject(value)
+                ? JSON.stringify(value, null, 2)
+                : String(value);
+            }
+            const interpolationRE = /\{\{([^]+?)\}\}/g;
+            function walk(node, context) {
+                const { nodeType } = node;
+                if (nodeType === 1) { // Element
+                    let exp;
+                    if ((exp = checkAttr(node, 'v-if'))) {
+                        return _if(node, exp, context);
+                    }
+                    if ((exp = checkAttr(node, 'v-for'))) {
+                        return _for(node, exp, context);
+                    }
+                    walkChildren(node, context);
+                }
+                if (nodeType === 3) { // Text
+                    const text = node.textContent;
+                    let lastIndex = 0;
+                    if (text.includes('{{')) {
+                        let match = null;
+                        const segments = []; // 保存所有截断的文本
+                        while ((match = interpolationRE.exec(text))) {
+                            const leading = text.slice(lastIndex, match.index);
+                            if (leading) { // }}...{{花括号中间的部分，为了保持格式正确，也需要拼接
+                                segments.push(JSON.stringify(leading));
+                            }
+                            lastIndex = match.index + match[0].length;
+                            const exp = match[1].trim(); // 删除表达式前后的空白字符
+                            segments.push(`toDisplayString(${exp})`); // 匹配的表达式都需要通过toDisplayString函数进行统一转换
+                        }
+                        if (lastIndex < text.length) {
+                            segments.push(JSON.stringify(text.slice(lastIndex)));
+                        }
+                        node.textContent = '';
+                        context.effect(() => {
+                            node.textContent = createFunc(segments.filter((s) => Boolean(s.trim())).join('+'))(context.scope);
+                        });
+                    }
+                    return;
+                }
+                const dirRE = /^(@|:|v-)/;
+                // 先递归解析子节点，然后解析node自己的属性
+                for (const { name, value } of [...node.attributes]) {
+                    if (dirRE.test(name)) { // 以@/:/v-开头
+                        processDirective(node, name, value, context);
+                    }
+                }
+            }
+            // [A-Za-z_$]：字母(大小写)下划线或者$开头，也就是js变量名开头的规则
+            // [\w$]*：变量名开头之后，后面可以跟字母、数字、下划线、$，重复0次或者多次
+            // \.[A-Za-z_$][\w$]*|\['[^']*?']|\["[^"]*?"]|\[\d+]|\[[A-Za-z_$][\w$]*]：一个分组，里面又分为下面5种情况
+            // \.[A-Za-z_$][\w$]*：【.】开头，后面是合法的js标识符
+            // \['[^']*?']：匹配['xxxx']，[^']匹配除了单引号的所有字符
+            // \["[^"]*?"]：匹配["xxxx"]
+            // \[\d+]：匹配[123]
+            // \[[A-Za-z_$][\w$]*]：匹配合法的js标识符
+            // 综上所述，simplePathRE也就是匹配调用scope中存在的方法，例如:foo、scope.foo、scope['foo']
+            const simplePathRE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\['[^']*?']|\["[^"]*?"]|\[\d+]|\[[A-Za-z_$][\w$]*])*$/;
+            function on({ el, get, exp, arg, modifiers }) {
+                if (!arg) { // 对于事件指令来说，必须要有指令参数，即事件名称才是合法的
+                    console.error(`v-on="obj" syntax is not supported in petite-vue.`);
+                    return;
+                }
+                let handler = simplePathRE.test(exp)
+                    ? get(`(e => ${exp}(e))`) /*直接调用的是scope中的方法*/
+                    : get(`($event => { ${exp} })`) /*行内js语句，需要被包裹在函数中再执行*/;
+                if (modifiers) {
+                   // 暂时省略对修饰符的处理
+                }
+                el.addEventListener(arg, handler, false);
+            }
+            let activeBranchIndex = -1;
+            let activeBranchEl = null;
+            function _if(el, exp, ctx) {
+                if (!exp.trim()) {
+                    console.warn(`v-if expression cannot be empty.`);
+                }
+                const parent = el.parentElement;
+                const anchor = new Comment('v-if');
+                parent.insertBefore(anchor, el);
+                const branches = [];
+                branches.push({
+                    el,
+                    exp,
+                });
+                let next = null;
+                while((next = el.nextElementSibling)) {
+                    if (next.hasAttribute('v-else-if')) {
+                        branches.push({
+                            el: next,
+                            exp: next.getAttribute('v-else-if'),
+                        });
+                        parent.removeChild(next);
+                        next.removeAttribute('v-else-if');
+                    } else if (next.hasAttribute('v-else')) {
+                        branches.push({
+                            el: next,
+                        });
+                        parent.removeChild(next);
+                        next.removeAttribute('v-else');
+                    } else {
+                        break;
+                    }
+                }
+                const nextNode = el.nextSibling;
+                parent.removeChild(el);
+                const removeActiveBlock = () => {
+                    if (activeBranchEl) {
+                        parent.insertBefore(anchor, activeBranchEl);
+                        parent.removeChild(activeBranchEl); // 先删除当前渲染的分支节点
+                    }
+                }
+                ctx.effect(() => {
+                    for (let i = 0; i < branches.length; i++) {
+                        const { exp, el: branchEl } = branches[i];
+                        if (!exp /*v-else*/ || createFunc(exp)(ctx.scope)) {
+                            if (i !== activeBranchIndex) {
+                                removeActiveBlock();
+                                parent.insertBefore(branchEl, anchor);
+                                parent.removeChild(anchor);
+                                activeBranchIndex = i;
+                                activeBranchEl = branchEl;
+                            }
+                            return;
+                        }
+                    }
+                    activeBranchIndex = -1;
+                    removeActiveBlock();
+                });
+                return nextNode;
+            }
+            const forAliasRE = /([\s\S]*?)\s+(?:in|of)\s+([\s\S]*)/;
+            const stripParensRE = /^\(|\)$/g;
+            const forIteratorRE = /,([^,\}\]]*)(?:,([^,\}\]]*))?$/;
+            const destructureRE = /\{\s*([^]+)\s*\}|\[\s*([^]+)\s*\]/;
+            function _for(el, exp, ctx) {
+                const inMatch = exp.match(forAliasRE);
+                if (!inMatch) {
+                    console.error(`invalid v-for expression: ${exp}`);
+                    return;
+                }
+                const nextNode = el.nextSibling;
+                const parent = el.parentElement;
+                const anchor = new Text('');
+                parent.insertBefore(anchor, el);
+                parent.removeChild(el);
+                const sourceExp = inMatch[2].trim();
+                let valueExp = inMatch[1].trim().replace(stripParensRE, '').trim(); // 去掉括号 ({ id, text }, index) => { id, text }, index
+                let keyAttr = 'key';
+                // 依次判断元素是否有属性值 key|:key|v-bind:key
+                let keyExp = el.getAttribute(keyAttr) ||
+                    el.getAttribute((keyAttr = ':key')) ||
+                    el.getAttribute((keyAttr = 'v-bind:key'));
+                if (keyExp) {
+                    el.removeAttribute(keyAttr);
+                    if (keyAttr === 'key') { // 不是通过petite-vue语法绑定，序列化keyExp
+                        keyExp = JSON.stringify(keyExp);
+                    }
+                }
+                //
+                let match;
+                let indexExp;
+                let objIndexExp;
+                // 满足 【,xxx,】格式，其中xxx不能包含【,}]】这三种符号，其实也就是匹配除开{...}和[...]的部分，如果我们字符串是{id, text}, index，那么匹配的就是index
+                if ((match = valueExp.match(forIteratorRE))) {
+                    valueExp = valueExp.replace(forIteratorRE, '').trim(); //只保留{...}和[...]部分
+                    indexExp = match[1].trim(); // 索引标识符
+                    // index后面还可以跟索引，例如{ id, text }, index, objIndex
+                    if (match[2]) {
+                        objIndexExp = match[2].trim();
+                    }
+                }
+                let isArrayDestructure = false; // 是否是[...]数组结构化赋值
+                let destructureBindings; // 保存结构化赋值标识符，例如['id', 'text']
+                // 
+                if ((match = valueExp.match(destructureRE))) {
+                    destructureBindings = (match[1] || match[2]).split(',').map((s) => s.trim());
+                    isArrayDestructure = valueExp[0] === '[';
+                }
+                let mounted = false;
+                let blocks = [];
+                let childCtxs = [];
+                let keyToIndexMap;
+                ctx.effect(() => {
+                    const source = createFunc(sourceExp)(ctx.scope);
+                    const prevKeyToIndexMap = keyToIndexMap;
+                    [childCtxs, keyToIndexMap] = createChildContexts(source);
+                    if (!mounted) {
+                        blocks = childCtxs.map((s) => mountBlock(s, anchor));
+                        mounted = true;
+                    } else {
+                        const nextBlocks: Block[] = []
+                        for (let i = 0; i < blocks.length; i++) {
+                            if (!keyToIndexMap.has(blocks[i].key)) {
+                                blocks[i].remove();
+                            }
+                        }
+                        const nextBlocks = [];
+                        let i = childCtxs.length; // childCtxs每次更新都会根据状态值重新生成，保存本次需要渲染的上下文信息
+                        while (i--) {
+                          const childCtx = childCtxs[i]; // 当前判断的上下文
+                          const oldIndex = prevKeyToIndexMap.get(childCtx.key); // 上下文的key和对应的block对象的key相同
+                          const next = childCtxs[i + 1]; //
+                          const nextBlockOldIndex = next && prevKeyToIndexMap.get(next.key); // 下一个上下文在上一次渲染的索引
+                          const nextBlock =
+                            nextBlockOldIndex == null ? undefined : blocks[nextBlockOldIndex]; // 如果nextBlockOldIndex存在，说明childCtx对应的block在上一次渲染时，后面有block，以此为基准点
+                          if (oldIndex == null) { // key在prevKeyToIndexMap不存在，那么必然是新增
+                            // new
+                            nextBlocks[i] = mountBlock(
+                              childCtx,
+                              nextBlock ? nextBlock.el : anchor
+                            );
+                          } else {
+                            // update
+                            const block = (nextBlocks[i] = blocks[oldIndex]); // 更新，直接复用存在的block
+                            Object.assign(block.ctx.scope, childCtx.scope); // scope合并，确保ui更新
+                            if (oldIndex !== i) { // 位置发生了变化
+                              // moved
+                              if (blocks[oldIndex + 1] !== nextBlock) {
+                                block.insert(parent, nextBlock ? nextBlock.el : anchor);
+                              }
+                            }
+                          }
+                        }
+                        blocks = nextBlocks;
+                    }
+                });
+                function mountBlock(ctx, ref) {
+                    const block = new Block(el, ctx);
+                    block.key = ctx.key;
+                    block.insert(parent, ref);
+                    return block;
+                }
+                function createChildContexts(source) {
+                    const map = new Map();
+                    const ctxs = [];
+                    if (Array.isArray(source)) {
+                        for (let i = 0; i < source.length; i++) {
+                            ctxs.push(createChildContext(map, source[i], i));
+                        }
+                    } else if (typeof source === 'number') {
+                        for (let i = 0; i < source; i++) {
+                            ctxs.push(createChildContext(map, i + 1, i));
+                        }
+                    } else if (isObject(source)) {
+                        let i = 0;
+                        for (let key in source) {
+                            ctxs.push(createChildContext(map, source[key], i++, key));
+                        }
+                    }
+                    return [ctxs, map];
+                }
+                function createChildContext(map, value, index, objKey) {
+                    const data = {};
+                    if (destructureBindings) {
+                        destructureBindings.forEach((b, i) => {
+                            data[b] = value[isArrayDestructure ? i : b];
+                        });
+                    } else {
+                        data[valueExp] = value;
+                    }
+                    // 当source是对象时才会有objKey
+                    if (objKey) {
+                        indexExp && (data[indexExp] = objKey);
+                        objIndexExp && (data[objIndexExp] = index);
+                    } else {
+                        indexExp && (data[indexExp] = index);
+                    }
+                    // 每个子节点都创建一个上下文
+                    const childCtx = createScopedContext(ctx, data);
+                    const key = keyExp ? createFunc(keyExp)(childCtx.scope) : index;
+                    map.set(key, index); // 建立key和index之间的映射关系，方便后面更新比较
+                    childCtx.key = key;
+                    return childCtx;
+                }
+                return nextNode;
+            }
+            function Block(template, parentCtx, isRoot) {
+                this.isFragment = template instanceof HTMLTemplateElement;
+                if (isRoot) {
+                    this.template = template;
+                } else if (this.isFragment) {
+                    this.template = template.context.cloneNode(true);
+                } else {
+                    this.template = template.cloneNode(true);
+                }
+
+                if (isRoot) {
+                    this.ctx = parentCtx;
+                } else {
+                    this.parentCtx = parentCtx;
+                    this.ctx = createContext(parentCtx);
+                }
+                walk(this.template, this.ctx);
+            }
+            Block.prototype.insert = function(parent, anchor) {
+                parent.insertBefore(this.template, anchor);
+            };
+            Block.prototype.remove = function() {
+                this.template.parentNode.removeChild(this.template);
+            };
+            function createScopedContext(ctx, data) {
+                const parentScope = ctx.scope;
+                const mergedScope = Object.create(parentScope);
+                Object.defineProperties(mergedScope, Object.getOwnPropertyDescriptors(data));
+                const reactiveProxy = reactive(new Proxy(mergedScope, {
+                    set(target, key, val, receiver) {
+                        // when setting a property that doesn't exist on current scope,
+                        // do not create it on the current scope and fallback to parent scope.
+                        if (receiver === reactiveProxy && !target.hasOwnProperty(key)) {
+                            return Reflect.set(parentScope, key, val);
+                        }
+                        return Reflect.set(target, key, val, receiver);
+                    }
+                }));
+                return {
+                    ...ctx,
+                    scope: reactiveProxy,
+                }  
+            }
+            // 所有内置指令集合，目前就只有on
+            const builtInDirectives = {
+                on,
+                if: _if,
+                for: _for,
+            };
+            const modifierRE = /\.([\w-]+)/g;
+            function processDirective(el, raw, exp, ctx) {
+                let dir = null; // 指令名
+                let arg = null; // 指令参数
+                let modifiers = null; // 指令所有的修饰符
+                let modMatch = null;
+                while((modMatch = modifierRE.exec(raw))) { // 提取出事件修饰符，@click.a.b => { a: true, b: true }
+                    // (modifiers || (modifiers = {}))[modMatch[1]] = true; petite-vue源码
+                    // raw = raw.slice(0, modMatch.index); petite-vue源码
+                    if (!modifiers) {
+                        modifiers = {};
+                    }
+                    modifiers[modMatch[1]] = true;
+                }
+                raw = raw.includes('.') ? raw.slice(0, raw.indexOf('.')) : raw;
+                if(raw[0] === ':') {
+                    // bind指令，暂时未实现
+                }
+                if (raw[0] === '@') {
+                    dir = on;
+                    arg = raw.slice(1);
+                } else { // v-xx形式的指令
+                    const argIndex = raw.indexOf(':');
+                    const dirName = argIndex > 0 ? raw.slice(2, argIndex) : raw.slice(2);
+                    dir = builtInDirectives[dirName] || ctx.dirs[dirName] /*自定义指令*/;
+                    arg = argIndex > 0 ? raw.slice(argIndex + 1) : undefined;
+                }
+                if (dir) {
+                    applyDirective(el, dir, exp, ctx, arg, modifiers);
+                    el.removeAttribute(raw);
+                } else {
+                    console.error(`unknown custom directive ${raw}.`);
+                }
+            }
+
+            function applyDirective(el, dir, exp, ctx, arg, modifiers) {
+                const get = (e = exp) => createFunc(e)(ctx.scope);
+                dir({
+                    el,
+                    get,
+                    effect: ctx.effect,
+                    ctx,
+                    exp,
+                    arg,
+                    modifiers,
+                });
+            }
+            function walkChildren(node, context) {
+                let child = node.firstChild;
+                while(child) {
+                    walk(child, context);
+                    child = child.nextSibling;
+                }
+            }
+            let activeEffect = null;
+            const effectStack = [];
+            function createReactiveEffect(fn) {
+                function reactiveEffect() {
+                    activeEffect = fn;
+                    effectStack.push(fn);
+                    fn();
+                    effectStack.pop();
+                    activeEffect = effectStack[effectStack.length - 1];
+                }
+                reactiveEffect.lazy = false;
+                return reactiveEffect;
+            }
+            const targetMap = new WeakMap();
+            function trigger(target, key) {
+                const m = targetMap.get(target);
+                const effects = m.get(key);
+                effects.forEach((effect) => {
+                    effect && effect();
+                });
+            }
+            function reactive(target) {
+                const proxy = new Proxy(target, {
+                    get(target, key) {
+                        const m = targetMap.get(target);
+                        if (!m.has(key)) {
+                            m.set(key, new Set());
+                        }
+                        const depMap = m.get(key);
+                        depMap.add(activeEffect);
+                        const result = Reflect.get(...arguments);
+                        return result;
+                    },
+                    set(target, key, value) {
+                        const result = Reflect.set(...arguments);
+                        trigger(...arguments);
+                        return result;
+                    },
+                });
+                targetMap.set(target, new Map());
+                return proxy;
+            }
+            function createContext(parent) {
+                return {
+                    ...parent,
+                    scope: parent ? parent.scope : reactive({}),
+                    effects: [],
+                    dirs: {},
+                    effect(fn, options) {
+                        const reactiveEffect = createReactiveEffect(fn);
+                        if (!reactiveEffect.lazy) {
+                            reactiveEffect();
+                        }
+                        this.effects.push(reactiveEffect);
+                    }
+                };
+            }
+            const PetiteVue = {
+                createApp(scope) {
+                    const appContext = createContext();
+                    if (scope) {
+                        appContext.scope = reactive(scope);
+                    }
+                    const app = {
+                        context: appContext,
+                        mount() {
+                            const root = document.querySelector('[v-scope]');
+                            if (!root) {
+                                console.warn('请提供有v-scope属性的html标签');
+                                return;
+                            }
+                            root.removeAttribute('v-scope');
+                            walk(root, appContext);
+                            
+                        }
+                    };
+                    return app;
+                }
+            };
+        </script>
+        <script>
+            PetiteVue.createApp({
+                list: [
+                  { id: 1, text: 'bar' },
+                  { id: 2, text: 'boo' },
+                  { id: 3, text: 'baz' },
+                  { id: 4, text: 'bazz' }
+                ],
+            }).mount();
+        </script>
+    </body>
+</html>
