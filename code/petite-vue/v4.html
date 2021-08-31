@@ -228,7 +228,6 @@
                         blocks = childCtxs.map((s) => mountBlock(s, anchor));
                         mounted = true;
                     } else {
-                        const nextBlocks: Block[] = []
                         for (let i = 0; i < blocks.length; i++) {
                             if (!keyToIndexMap.has(blocks[i].key)) {
                                 blocks[i].remove();
