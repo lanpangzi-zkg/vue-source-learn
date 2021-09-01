@@ -164,3 +164,5 @@ while (i--) {
 blocks = nextBlocks;
 ```
 通过上面的代码分析，nextBlock是很重要的定位点，确定新插入和更新的位置，至此就分析完毕v-for指令的实现了，具体实现的完整代码点击[这里](https://github.com/lanpangzi-zkg/vue-source-learn/blob/main/code/petite-vue/v4.html)。
+
+最后再针对上面的更新算法说明一下，源码中其实是有点问题的，列表渲染的顺序是不稳定的，例如mount时数据源是[1,2,3]，渲染顺序符合预期(1,2,3)，但当update时，如果数据源变成了[4,5,6]，界面渲染的最终效果却是倒序的(6,5,4)，为什么会这样，因为当没有nextBlock时，插入的基准节点都是anchor，插入流程变成：`6 anchor`，`6 5 anchor`，`6 5 4 anchor`，因此最终我们看到的就是654了，那怎么改呢，anchor每一次循环后都需要指向childCtx的渲染节点，这样就能保证顺序了。
