@@ -8,6 +8,43 @@
         <div v-scope>
             <div :id="a">simple binding - this should be green</div>
             <input type="text" v-model="text">
+            <div>{{text}}</div>
+
+            <label><input type="radio" v-model="radioSelected" value="one" /> one</label>
+            <label><input type="radio" v-model="radioSelected" value="two" /> two</label>
+            <label><input type="radio" v-model="radioSelected" value="three" /> three</label>
+            <div>{{ radioSelected }}</div>
+
+            <input type="checkbox" id="checkbox" v-model="checked" />
+            <label for="checkbox">{{ checked }}</label>
+            <br>
+            <input
+                type="checkbox"
+                v-model="checkToggle"
+                :true-value="trueValue"
+                :false-value="falseValue"
+            />
+            <div>{{ checkToggle }}</div>
+
+            <h2>Checkbox w/ Array</h2>
+            <label><input type="checkbox" v-model="arr" value="one" /> one</label>
+            <label><input type="checkbox" v-model="arr" value="two" /> two</label>
+            <label><input type="checkbox" v-model="arr" :value="123" /> actual number</label>
+            <div>{{ arr }}</div>
+            <h2>Select</h2>
+            <select v-model="selected">
+                <option>one</option>
+                <option>two</option>
+                <option>three</option>
+            </select>
+            <div>{{ selected }}</div>
+
+            <div class="static" :class="classes">
+                class binding - this should be red and bold
+            </div>
+            <div style="font-weight: bold" :style="style">
+                style binding - this should be blue and bold
+            </div>
         </div>
         <script>
             function isObject(value) {
@@ -357,7 +394,7 @@
             function normalizeClass(value) {
                 let res = [];
                 if (typeof value === 'string') {
-                    res = value;
+                    res.push(value);
                 } else if (isObject(value)) {
                     for (const name in value) {
                         if (value[name]) {
@@ -371,28 +408,148 @@
                 }
                 return res.join(' ');
             }
-            function setProp(el, key, value, preValue) {
+            function hyphenate(value) {
+                return value.replace(/\B([A-Z])\B/, (match) => { return '-' + match.toLowerCase(); });
+            }
+            const listDelimiterRE = /;(?![^(]*\))/g;
+            const propertyDelimiterRE = /:(.+)/;
+            function parseStringStyle(cssText) {
+                const ret = {};
+                cssText.split(listDelimiterRE).forEach(item => {
+                    if (item) {
+                        const tmp = item.split(propertyDelimiterRE);
+                        tmp.length > 1 && (ret[tmp[0].trim()] = tmp[1].trim());
+                    }
+                });
+                return ret;
+            }
+            function normalizeStyle(value) {
+                if (Array.isArray(value)) {
+                    const res = {};
+                    for (let i = 0; i < value.length; i++) {
+                        const item = value[i];
+                        const normalized = normalizeStyle(typeof item === 'string' ? parseStringStyle(item) : item);
+                        if (normalized) {
+                            for (const key in normalized) {
+                                res[key] = normalized[key];
+                            }
+                        }
+                    }
+                    return res;
+                } else if (isObject(value)) {
+                    return value;
+                }
+            }
+            const importantRE = /\s*!important$/;
+            function setStytle(style, key, value) {
+                if (Array.isArray(value)) {
+                    value.forEach((v) => {
+                        setStytle(style, name, v);
+                    });
+                } else {
+                    if (key.startsWith('--')) { // 自定义css属性
+                        style.setProperty(key, value);
+                    } else {
+                        if (importantRE.test(value)) {
+                            style.setProperty(hyphenate(key), value.replace(importantRE, ''), 'important');
+                        } else {
+                            style[key] = value;
+                        }
+                    }
+                }
+            }
+            function setProp(el, key, value, prevValue) {
                 if (key ==='class') {
                     el.setAttribute('class', normalizeClass(el._class ? [el._class, value] : value) || '');
                 } else if (key ==='style') {
-                    
+                    value = normalizeStyle(value);
+                    const { style } = el;
+                    if (!value) {
+                        el.removeAttribute('style');
+                    } else if (typeof value === 'string') {
+                        if (value !== prevValue) {
+                            style.cssText = value;
+                        }
+                    } else {
+                        for (const key in value) {
+                            setStytle(style, key, value[key]);
+                        }
+                        if (prevValue && !typeof value === 'string') {
+                            for (const key in prevValue) {
+                                if (value[key] == null) {
+                                    setStytle(style, key, '');
+                                }
+                            }
+                        }
+                    }
                 } else if (key in el) {
                     el[key] = value;
                 } else {
-                    if (value != null) {
+                    if (key === 'true-value') {
+                        el._trueValue = value;
+                    } else if (key === 'false-value') {
+                        el._falseValue = value;
+                    } else if (value != null) {
                         el.setAttribute(key, value);
                     } else {
                         el.removeAttribute(key);
                     }
                 }
             }
-            function _bind({ el, ctx, exp, arg }) {
+            function looseIndexOf(arr, b) {
+                return arr.findIndex((a) => {
+                    return looseEqual(a, b);
+                });
+            }
+            // 判断两个变量是否是宽松相等
+            function looseEqual(a, b) {
+                if (typeof a !== typeof b) { // 类型不同，则一定不相等
+                    return false;
+                }
+                if (a instanceof Date) {
+                    return a.getTime() === b.getTime();
+                } else if (Array.isArray(a)) {
+                    if (a.length !== b.length) {
+                        return false;
+                    }
+                    let isEqual = true;
+                    for (let i = 0; i < a.length; i++) {
+                        isEqual = looseEqual(a[i], b[i]);
+                        if (!isEqual) {
+                            return;
+                        }
+                    }
+                    return isEqual;
+                } else if (isObject(a)) {
+                    const akv = Object.entries(a);
+                    const bkv = Object.entries(b);
+                    if (akv.length !== bkv.length) {
+                        return false;
+                    }
+                    let isEqual = true;
+                    for (let i = 0; i < akv.length; i++) {
+                        const [k, v] = akv[i];
+                        if (!(k in b)) {
+                            isEqual = false;
+                            return;
+                        }
+                        isEqual = looseEqual(v, b[k]);
+                        if (!isEqual) {
+                            return;
+                        }
+                    }
+                    return isEqual;
+                } else {
+                    return a === b;
+                }
+            }
+            function _bind({ el, ctx, exp, arg, get }) {
                 let prevValue = null; // 记录上一次属性对象，对比更新
                 if (arg === 'class') {
                     el._class = el.className;
                 }
                 ctx.effect(() => {
-                    const value = ctx.scope[exp];
+                    const value = get();
                     if (arg) { // v-bind:xxx="yyy"
                         setProp(el, arg, value, prevValue);
                     } else { // v-bind="yyy"
@@ -412,11 +569,61 @@
                 const type = el.type;
                 const { number = type === 'number', trim } = modifiers || {};
                 if (el.tagName === 'SELECT') {
-
+                    // 没有实现多选模式
+                    el.addEventListener('change', () => {
+                        ctx.scope[exp] = el.value;
+                    });
+                    ctx.effect(() => {
+                        const value = get();
+                        const isMultiple = el.multiple;
+                        for (let i = 0; i < el.options.length; i++) {
+                            const option = el.options[i];
+                            const optionValue = option.value;
+                            if (isMultiple) {
+                                // ...
+                            } else {
+                                option.selected = looseEqual(optionValue, value);
+                            }
+                        }
+                    });
                 } else if (type === 'checkbox') {
-
+                    el.addEventListener('change', () => {
+                        const modelValue = get();
+                        const checked = el.checked;
+                        if (Array.isArray(modelValue)) {
+                            const elementValue = el.value;
+                            const index = looseIndexOf(modelValue, elementValue);
+                            if (index < 0 && checked) {
+                                ctx.scope[exp] = modelValue.concat(elementValue);
+                            } else if (index >= 0 && !checked) {
+                                modelValue.splice(index, 1);
+                                ctx.scope[exp] = modelValue.slice();
+                            }
+                        } else {
+                            ctx.scope[exp] = getCheckboxValue(el, checked);
+                        }
+                    });
+                    let oldValue;
+                    ctx.effect(() => {
+                        const value = get();
+                        if (Array.isArray(value)) {
+                            el.checked = looseIndexOf(value, el.value) >= 0;
+                        } else if (value !== oldValue) {
+                            el.checked = looseEqual(value, getCheckboxValue(el, true));
+                        }
+                        oldValue = value;
+                    });
+                    function getCheckboxValue(el, checked) {
+                        const key = checked ? '_trueValue' : '_falseValue';
+                        return key in el ? el[key] : checked;
+                    }
                 } else if (type === 'radio') {
-
+                    el.addEventListener('change', (e) => {
+                        ctx.scope[exp] = e.target.value;
+                    });
+                    ctx.effect(() => {
+                        el.checked = get() === el.value;
+                    });
                 } else {
                     const resolveValue = (val) => {
                         if (trim) {
@@ -428,7 +635,25 @@
                         }
                         return val;
                     };
+                    el.addEventListener('compositionstart', function onCompositionStart(e) {
+                        e.target.composing = true;
+                    });
+                    el.addEventListener('compositionend', function onCompositionEnd(e) {
+                        const target = e.target;
+                        if (target.composing) {
+                            target.composing = false;
+                            trigger(target, 'input');
+                        }
+                    });
+                    function trigger(el, type) {
+                        const event = document.createEvent('HTMLEvents');
+                        event.initEvent(type, true, true);
+                        el.dispatchEvent(event);
+                    }
                     el.addEventListener(modifiers?.lazy ? 'change' : 'input', () => {
+                        if (el.composing) {
+                            return;
+                        }
                         ctx.scope[exp] = resolveValue(el.value);
                     });
                     ctx.effect(() => {
@@ -582,8 +807,20 @@
         </script>
         <script>
             PetiteVue.createApp({
-               a: 'green',
-               text: 'foo',
+                a: 'green',
+                text: 'foo',
+                checked: true,
+                arr: ['one'],
+                radioSelected: 'one',
+                checkToggle: { a: 1 },
+                trueValue: { a: 1 },
+                falseValue: { a: 2 },
+                selected: 'two',
+                classes: ['foo', { red: true }],
+                style: { color: 'blue' },
+                obj: {
+                  class: 'orange',
+                },
             }).mount();
         </script>
     </body>
