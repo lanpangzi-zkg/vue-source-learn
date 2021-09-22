@@ -8,6 +8,7 @@ petite-vue相比vue3，实现更加简单，代码量也少了很多，学习成
 ## 3.<a href="/articles/petite-vue/if.md">v-if</a>
 ## 4.<a href="/articles/petite-vue/for.md">v-for</a>
 ## 5.<a href="/articles/petite-vue/其他指令.md">其他指令</a>
+## 6.<a href="/articles/petite-vue/设计与流程.md">设计与流程</a>
 
 # vue3
 ...待续...
